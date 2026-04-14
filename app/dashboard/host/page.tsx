@@ -1,8 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { Property, Job } from '@/types/database'
+import type { Property, Job, JobStatus } from '@/types/database'
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface Cleaner {
   id: string
@@ -14,10 +18,44 @@ interface PropertyWithJobs extends Property {
   jobs: Job[]
 }
 
+interface JobWithMeta extends Job {
+  propertyName: string
+  cleanerName: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const STATUSES: JobStatus[] = ['pending', 'in_progress', 'completed']
+
+const STATUS_STYLES: Record<JobStatus, string> = {
+  pending: 'bg-amber-100 text-amber-800',
+  in_progress: 'bg-blue-100 text-blue-800',
+  completed: 'bg-green-100 text-green-800',
+}
+
+const STATUS_LABELS: Record<JobStatus, string> = {
+  pending: 'Pending',
+  in_progress: 'In progress',
+  completed: 'Completed',
+}
+
+const COLUMN_HEADERS: Record<JobStatus, { label: string; dot: string }> = {
+  pending: { label: 'Pending', dot: 'bg-amber-400' },
+  in_progress: { label: 'In Progress', dot: 'bg-blue-400' },
+  completed: { label: 'Completed', dot: 'bg-green-400' },
+}
+
 const emptyPropertyForm = { name: '', address: '' }
 const emptyJobForm = { scheduled_date: '', cleaner_id: '', notes: '' }
 
+// ---------------------------------------------------------------------------
+// Root page
+// ---------------------------------------------------------------------------
+
 export default function HostDashboard() {
+  const [tab, setTab] = useState<'properties' | 'jobs'>('properties')
   const [properties, setProperties] = useState<PropertyWithJobs[]>([])
   const [cleaners, setCleaners] = useState<Cleaner[]>([])
   const [loading, setLoading] = useState(true)
@@ -39,15 +77,11 @@ export default function HostDashboard() {
     const {
       data: { user },
     } = await supabase.auth.getUser()
-
     if (!user) return
 
     const { data, error } = await supabase
       .from('properties')
-      .select(`
-        *,
-        jobs(id, property_id, cleaner_id, status, scheduled_date, notes, created_at)
-      `)
+      .select(`*, jobs(id, property_id, cleaner_id, status, scheduled_date, notes, created_at)`)
       .eq('owner_id', user.id)
       .order('created_at', { ascending: false })
 
@@ -114,151 +148,406 @@ export default function HostDashboard() {
             <h1 className="text-xl font-semibold text-gray-900">Host Dashboard</h1>
             <p className="text-sm text-gray-500 mt-0.5">Manage your properties</p>
           </div>
-          <button
-            onClick={() => {
-              setShowForm((v) => !v)
-              setForm(emptyPropertyForm)
-              setFormError(null)
-            }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm
-                       hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition"
-          >
-            {showForm ? (
-              'Cancel'
-            ) : (
-              <>
-                <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
-                </svg>
-                Add property
-              </>
-            )}
-          </button>
+          {tab === 'properties' && (
+            <button
+              onClick={() => {
+                setShowForm((v) => !v)
+                setForm(emptyPropertyForm)
+                setFormError(null)
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm
+                         hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition"
+            >
+              {showForm ? (
+                'Cancel'
+              ) : (
+                <>
+                  <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
+                  </svg>
+                  Add property
+                </>
+              )}
+            </button>
+          )}
+        </div>
+
+        {/* Tabs */}
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+          <nav className="-mb-px flex gap-6" aria-label="Tabs">
+            {(['properties', 'jobs'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`py-3 text-sm font-medium border-b-2 transition ${
+                  tab === t
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                {t === 'properties' ? 'Properties' : 'Jobs'}
+              </button>
+            ))}
+          </nav>
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-
-        {/* Inline add-property form */}
-        {showForm && (
-          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-            <h2 className="text-base font-semibold text-gray-900 mb-5">New property</h2>
-            <form onSubmit={handleAddProperty} noValidate className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label htmlFor="prop-name" className="block text-sm font-medium text-gray-700 mb-1">
-                    Property name
-                  </label>
-                  <input
-                    id="prop-name"
-                    type="text"
-                    required
-                    value={form.name}
-                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                    disabled={submitting}
-                    placeholder="Beach House"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm
-                               focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
-                               disabled:bg-gray-50 disabled:text-gray-400 transition"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="prop-address" className="block text-sm font-medium text-gray-700 mb-1">
-                    Address
-                  </label>
-                  <input
-                    id="prop-address"
-                    type="text"
-                    required
-                    value={form.address}
-                    onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
-                    disabled={submitting}
-                    placeholder="123 Ocean Drive, Miami FL"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm
-                               focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
-                               disabled:bg-gray-50 disabled:text-gray-400 transition"
-                  />
-                </div>
-              </div>
-
-              {formError && (
-                <p role="alert" className="text-sm text-red-600">
-                  {formError}
-                </p>
-              )}
-
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  disabled={submitting || !form.name.trim() || !form.address.trim()}
-                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm
-                             hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
-                             disabled:opacity-60 disabled:cursor-not-allowed transition"
-                >
-                  {submitting ? (
-                    <>
-                      <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                      </svg>
-                      Saving...
-                    </>
-                  ) : (
-                    'Save property'
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {/* Property grid */}
-        {loading ? (
-          <div className="flex justify-center py-24">
-            <svg className="h-8 w-8 animate-spin text-blue-600" viewBox="0 0 24 24" fill="none" aria-label="Loading">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-            </svg>
-          </div>
-        ) : properties.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center">
-            <div className="rounded-full bg-gray-100 p-4 mb-4">
-              <svg className="h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                  d="M2.25 12l8.954-8.955a1.126 1.126 0 011.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
-              </svg>
-            </div>
-            <p className="text-sm font-medium text-gray-900">No properties yet</p>
-            <p className="text-sm text-gray-500 mt-1">Click &quot;Add property&quot; to get started.</p>
-          </div>
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {tab === 'properties' ? (
+          <PropertiesPanel
+            properties={properties}
+            cleaners={cleaners}
+            loading={loading}
+            showForm={showForm}
+            form={form}
+            submitting={submitting}
+            formError={formError}
+            setForm={setForm}
+            onSubmit={handleAddProperty}
+            onJobCreated={fetchProperties}
+          />
         ) : (
-          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {properties.map((property) => (
-              <PropertyCard
-                key={property.id}
-                property={property}
-                cleaners={cleaners}
-                onJobCreated={fetchProperties}
-              />
-            ))}
-          </div>
+          <JobsBoard properties={properties} cleaners={cleaners} />
         )}
       </div>
     </main>
   )
 }
 
-const STATUS_STYLES: Record<string, string> = {
-  pending: 'bg-amber-100 text-amber-800',
-  in_progress: 'bg-blue-100 text-blue-800',
-  completed: 'bg-green-100 text-green-800',
+// ---------------------------------------------------------------------------
+// Properties panel (unchanged behaviour from before)
+// ---------------------------------------------------------------------------
+
+function PropertiesPanel({
+  properties,
+  cleaners,
+  loading,
+  showForm,
+  form,
+  submitting,
+  formError,
+  setForm,
+  onSubmit,
+  onJobCreated,
+}: {
+  properties: PropertyWithJobs[]
+  cleaners: Cleaner[]
+  loading: boolean
+  showForm: boolean
+  form: typeof emptyPropertyForm
+  submitting: boolean
+  formError: string | null
+  setForm: React.Dispatch<React.SetStateAction<typeof emptyPropertyForm>>
+  onSubmit: (e: React.FormEvent) => void
+  onJobCreated: () => void
+}) {
+  return (
+    <div className="space-y-8">
+      {showForm && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+          <h2 className="text-base font-semibold text-gray-900 mb-5">New property</h2>
+          <form onSubmit={onSubmit} noValidate className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="prop-name" className="block text-sm font-medium text-gray-700 mb-1">
+                  Property name
+                </label>
+                <input
+                  id="prop-name"
+                  type="text"
+                  required
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  disabled={submitting}
+                  placeholder="Beach House"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm
+                             focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                             disabled:bg-gray-50 disabled:text-gray-400 transition"
+                />
+              </div>
+              <div>
+                <label htmlFor="prop-address" className="block text-sm font-medium text-gray-700 mb-1">
+                  Address
+                </label>
+                <input
+                  id="prop-address"
+                  type="text"
+                  required
+                  value={form.address}
+                  onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
+                  disabled={submitting}
+                  placeholder="123 Ocean Drive, Miami FL"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm
+                             focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                             disabled:bg-gray-50 disabled:text-gray-400 transition"
+                />
+              </div>
+            </div>
+
+            {formError && (
+              <p role="alert" className="text-sm text-red-600">{formError}</p>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={submitting || !form.name.trim() || !form.address.trim()}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm
+                           hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+                           disabled:opacity-60 disabled:cursor-not-allowed transition"
+              >
+                {submitting ? (
+                  <>
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                    </svg>
+                    Saving...
+                  </>
+                ) : (
+                  'Save property'
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex justify-center py-24">
+          <svg className="h-8 w-8 animate-spin text-blue-600" viewBox="0 0 24 24" fill="none" aria-label="Loading">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+          </svg>
+        </div>
+      ) : properties.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-24 text-center">
+          <div className="rounded-full bg-gray-100 p-4 mb-4">
+            <svg className="h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M2.25 12l8.954-8.955a1.126 1.126 0 011.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+            </svg>
+          </div>
+          <p className="text-sm font-medium text-gray-900">No properties yet</p>
+          <p className="text-sm text-gray-500 mt-1">Click &quot;Add property&quot; to get started.</p>
+        </div>
+      ) : (
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {properties.map((property) => (
+            <PropertyCard
+              key={property.id}
+              property={property}
+              cleaners={cleaners}
+              onJobCreated={onJobCreated}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  pending: 'Pending',
-  in_progress: 'In progress',
-  completed: 'Completed',
+// ---------------------------------------------------------------------------
+// Jobs board (real-time Kanban)
+// ---------------------------------------------------------------------------
+
+function JobsBoard({
+  properties,
+  cleaners,
+}: {
+  properties: PropertyWithJobs[]
+  cleaners: Cleaner[]
+}) {
+  const [jobs, setJobs] = useState<JobWithMeta[]>([])
+  const [loading, setLoading] = useState(true)
+
+  // Keep a stable ref to cleaners so the real-time callback can access them
+  const cleanersRef = useRef(cleaners)
+  useEffect(() => { cleanersRef.current = cleaners }, [cleaners])
+
+  // Build a map of property id -> name from parent prop
+  const propertyMap = useRef<Record<string, string>>({})
+  useEffect(() => {
+    const m: Record<string, string> = {}
+    properties.forEach((p) => { m[p.id] = p.name })
+    propertyMap.current = m
+  }, [properties])
+
+  function buildJobWithMeta(job: Job): JobWithMeta {
+    return {
+      ...job,
+      propertyName: propertyMap.current[job.property_id] ?? 'Unknown property',
+      cleanerName: job.cleaner_id
+        ? (cleanersRef.current.find((c) => c.id === job.cleaner_id)?.full_name ?? null)
+        : null,
+    }
+  }
+
+  async function fetchJobs() {
+    const { data, error } = await supabase
+      .from('jobs')
+      .select('id, property_id, cleaner_id, status, scheduled_date, notes, created_at')
+      .order('scheduled_date', { ascending: true })
+
+    if (error || !data) return
+
+    setJobs((data as Job[]).map(buildJobWithMeta))
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    // Wait until we have property data before fetching jobs
+    if (properties.length === 0) {
+      setLoading(false)
+      return
+    }
+    fetchJobs()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [properties])
+
+  // Real-time subscription
+  useEffect(() => {
+    const channel = supabase
+      .channel('jobs-board')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'jobs' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const newJob = payload.new as Job
+            setJobs((prev) => [...prev, buildJobWithMeta(newJob)]
+              .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)))
+          } else if (payload.eventType === 'UPDATE') {
+            const updated = payload.new as Job
+            setJobs((prev) =>
+              prev.map((j) => j.id === updated.id ? buildJobWithMeta(updated) : j)
+            )
+          } else if (payload.eventType === 'DELETE') {
+            const deleted = payload.old as { id: string }
+            setJobs((prev) => prev.filter((j) => j.id !== deleted.id))
+          }
+        },
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-24">
+        <svg className="h-8 w-8 animate-spin text-blue-600" viewBox="0 0 24 24" fill="none" aria-label="Loading">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+        </svg>
+      </div>
+    )
+  }
+
+  if (jobs.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-center">
+        <div className="rounded-full bg-gray-100 p-4 mb-4">
+          <svg className="h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+              d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+        </div>
+        <p className="text-sm font-medium text-gray-900">No jobs yet</p>
+        <p className="text-sm text-gray-500 mt-1">Schedule a clean from the Properties tab to get started.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid gap-6 md:grid-cols-3">
+      {STATUSES.map((status) => {
+        const col = jobs.filter((j) => j.status === status)
+        const { label, dot } = COLUMN_HEADERS[status]
+        return (
+          <div key={status} className="flex flex-col gap-3">
+            {/* Column header */}
+            <div className="flex items-center gap-2 px-1">
+              <span className={`h-2.5 w-2.5 rounded-full ${dot}`} />
+              <span className="text-sm font-semibold text-gray-700">{label}</span>
+              <span className="ml-auto inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                {col.length}
+              </span>
+            </div>
+
+            {/* Cards */}
+            <div className="flex flex-col gap-3 min-h-[4rem]">
+              {col.length === 0 ? (
+                <div className="rounded-xl border-2 border-dashed border-gray-200 py-8 text-center">
+                  <p className="text-xs text-gray-400">No jobs</p>
+                </div>
+              ) : (
+                col.map((job) => <JobCard key={job.id} job={job} />)
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
+
+// ---------------------------------------------------------------------------
+// Job card
+// ---------------------------------------------------------------------------
+
+function JobCard({ job }: { job: JobWithMeta }) {
+  const formattedDate = new Date(job.scheduled_date + 'T00:00:00').toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-col gap-3 hover:shadow-md transition-shadow">
+      {/* Property name */}
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-semibold text-gray-900 leading-snug">{job.propertyName}</p>
+        <span
+          className={`shrink-0 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_STYLES[job.status]}`}
+        >
+          {STATUS_LABELS[job.status]}
+        </span>
+      </div>
+
+      {/* Date */}
+      <div className="flex items-center gap-1.5 text-xs text-gray-500">
+        <svg className="h-3.5 w-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+        {formattedDate}
+      </div>
+
+      {/* Cleaner */}
+      <div className="flex items-center gap-1.5 text-xs text-gray-500">
+        <svg className="h-3.5 w-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+        </svg>
+        {job.cleanerName ?? <span className="italic text-gray-400">Unassigned</span>}
+      </div>
+
+      {/* Notes */}
+      {job.notes && (
+        <p className="text-xs text-gray-500 border-t border-gray-100 pt-2 leading-relaxed line-clamp-2">
+          {job.notes}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Property card (unchanged behaviour from before)
+// ---------------------------------------------------------------------------
 
 function PropertyCard({
   property,
@@ -301,9 +590,7 @@ function PropertyCard({
 
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col hover:shadow-md transition-shadow">
-      {/* Card body */}
       <div className="p-5 flex flex-col gap-4 flex-1">
-        {/* Name + address */}
         <div className="flex-1">
           <h3 className="text-base font-semibold text-gray-900 leading-snug">{property.name}</h3>
           <p className="text-sm text-gray-500 mt-1 flex items-start gap-1.5">
@@ -314,7 +601,6 @@ function PropertyCard({
           </p>
         </div>
 
-        {/* Pending jobs badge + schedule button */}
         <div className="flex items-center justify-between pt-3 border-t border-gray-100">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Pending</span>
@@ -346,7 +632,6 @@ function PropertyCard({
           </button>
         </div>
 
-        {/* Inline schedule-clean form */}
         {showJobForm && (
           <form onSubmit={handleScheduleClean} noValidate className="border-t border-gray-100 pt-4 space-y-3">
             <div>
@@ -432,7 +717,6 @@ function PropertyCard({
         )}
       </div>
 
-      {/* Jobs list */}
       {property.jobs.length > 0 && (
         <div className="border-t border-gray-100 px-5 py-4 space-y-2">
           <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Jobs</p>
