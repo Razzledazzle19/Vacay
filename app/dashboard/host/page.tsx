@@ -38,7 +38,7 @@ export default function HostDashboard() {
     if (error || !data) return
 
     // Supabase returns count as [{ count: n }] when using .select('col(count)')
-    const mapped: PropertyWithPending[] = data.map((p: any) => ({
+    const mapped: PropertyWithPending[] = data.map((p: Record<string, unknown> & { jobs?: { count: number }[] }) => ({
       id: p.id,
       owner_id: p.owner_id,
       name: p.name,
@@ -212,7 +212,7 @@ export default function HostDashboard() {
               </svg>
             </div>
             <p className="text-sm font-medium text-gray-900">No properties yet</p>
-            <p className="text-sm text-gray-500 mt-1">Click "Add property" to get started.</p>
+            <p className="text-sm text-gray-500 mt-1">Click &quot;Add property&quot; to get started.</p>
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
